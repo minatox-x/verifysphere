@@ -32,12 +32,18 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnRetry.setOnClickListener { startVerification() }
 
-        handleIntent(intent)
+        // Post intent handling to the next message-queue pass so the window
+        // token is fully attached before TurnstileSDK.call() tries to show
+        // its DialogFragment. Calling show() before the window is ready
+        // causes a blank WebView that never loads the Turnstile widget,
+        // and clicking outside then fires onFailure("cancelled").
+        window.decorView.post { handleIntent(intent) }
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        intent?.let { handleIntent(it) }
+        // Same fix for new intents — post so any in-progress UI settles first
+        intent?.let { i -> window.decorView.post { handleIntent(i) } }
     }
 
     // -----------------------------------------------------------------------
@@ -52,7 +58,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // The entire path after "verifysphere://" is the encrypted payload.
         // Accepted forms:
         //   verifysphere://verify?data=<base64>
         //   verifysphere://<base64>
@@ -126,7 +131,6 @@ class MainActivity : AppCompatActivity() {
     private fun deliverToken(rawToken: String) {
         val p = payload ?: return
 
-        // Encrypt the token with the same key so the server can decrypt it
         val encryptedToken = try {
             CryptoHelper.encrypt(rawToken)
         } catch (e: Exception) {
@@ -134,22 +138,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // URL-encode the encrypted Base64 token for safe embedding in a query param
         val urlSafeToken = Uri.encode(encryptedToken)
-
-        // Append token to callbackUrl (handle existing query params)
         val callbackWithToken = buildCallbackUrl(p.callbackUrl, urlSafeToken)
 
-        // Show success state first
         showSuccess()
-
-        // Launch the URL in external browser / browser chooser
         openInBrowser(callbackWithToken, encryptedToken)
     }
 
-    /**
-     * Appends ?token=... or &token=... to the callback URL.
-     */
     private fun buildCallbackUrl(callbackUrl: String, urlSafeToken: String): String {
         return if (callbackUrl.contains('?')) {
             "$callbackUrl&token=$urlSafeToken"
@@ -158,35 +153,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Opens [url] in the system browser via a chooser.
-     * If no browser is available, shows a dialog with a copy button.
-     */
     private fun openInBrowser(url: String, encryptedToken: String) {
         val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addCategory(Intent.CATEGORY_BROWSABLE)
         }
-
         val chooser = Intent.createChooser(browserIntent, "Open verification result in browser")
 
         if (browserIntent.resolveActivity(packageManager) != null) {
             startActivity(chooser)
-            // Also show the fallback dialog so user has the URL if browser fails
-            showFallbackDialog(url, encryptedToken)
-        } else {
-            // No browser at all — go straight to dialog
-            showFallbackDialog(url, encryptedToken)
         }
+        // Always show the fallback dialog so user has the URL regardless
+        showFallbackDialog(url)
     }
 
-    /**
-     * Shows a dialog with the full callback URL and a Copy button.
-     * The encrypted token is embedded; the decrypted value is never shown.
-     */
-    private fun showFallbackDialog(callbackUrl: String, encryptedToken: String) {
-        // We show the full callbackUrl (with encrypted token appended) so
-        // the user can copy and paste it. We do NOT show the raw token or
-        // any decrypted values from the original payload.
+    private fun showFallbackDialog(callbackUrl: String) {
         AlertDialog.Builder(this, R.style.AppDialog)
             .setTitle("Open this URL in your browser")
             .setMessage("If the browser did not open automatically, copy the link below and paste it into any browser:\n\n$callbackUrl")
@@ -211,45 +191,44 @@ class MainActivity : AppCompatActivity() {
 
     private fun showWaiting() {
         with(binding) {
-            layoutWaiting.visibility  = View.VISIBLE
-            layoutSuccess.visibility  = View.GONE
-            layoutError.visibility    = View.GONE
-            layoutRetry.visibility    = View.GONE
+            layoutWaiting.visibility = View.VISIBLE
+            layoutSuccess.visibility = View.GONE
+            layoutError.visibility   = View.GONE
+            layoutRetry.visibility   = View.GONE
         }
     }
 
     private fun showSuccess() {
         with(binding) {
-            layoutWaiting.visibility  = View.GONE
-            layoutSuccess.visibility  = View.VISIBLE
-            layoutError.visibility    = View.GONE
-            layoutRetry.visibility    = View.GONE
+            layoutWaiting.visibility = View.GONE
+            layoutSuccess.visibility = View.VISIBLE
+            layoutError.visibility   = View.GONE
+            layoutRetry.visibility   = View.GONE
         }
     }
 
     private fun showRetry(message: String) {
         with(binding) {
-            layoutWaiting.visibility  = View.GONE
-            layoutSuccess.visibility  = View.GONE
-            layoutError.visibility    = View.GONE
-            layoutRetry.visibility    = View.VISIBLE
-            tvRetryMessage.text       = message
+            layoutWaiting.visibility = View.GONE
+            layoutSuccess.visibility = View.GONE
+            layoutError.visibility   = View.GONE
+            layoutRetry.visibility   = View.VISIBLE
+            tvRetryMessage.text      = message
         }
     }
 
     private fun showError(message: String) {
         with(binding) {
-            layoutWaiting.visibility  = View.GONE
-            layoutSuccess.visibility  = View.GONE
-            layoutRetry.visibility    = View.GONE
-            layoutError.visibility    = View.VISIBLE
-            tvErrorMessage.text       = message
+            layoutWaiting.visibility = View.GONE
+            layoutSuccess.visibility = View.GONE
+            layoutRetry.visibility   = View.GONE
+            layoutError.visibility   = View.VISIBLE
+            tvErrorMessage.text      = message
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Wipe any held tokens on activity destruction
         TurnstileSDK.clearAll()
         payload = null
     }
